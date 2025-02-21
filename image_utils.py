@@ -9,6 +9,24 @@ from PIL.ImageFile import ImageFile
 import piexif
 
 
+class ExifManipulator:
+    def __init__(self, max_date, change_date):
+        self.max_date = max_date
+        self.change_date = change_date
+
+    def process_directory(self, directory):
+        pass
+
+    def _process_single_file(self, file_path):
+        pass
+
+    def _handle_date_comparison(self, file_path, file_date):
+        pass
+
+    def _update_exif_data(self, file_path):
+        pass
+
+
 def get_jpg_files(directory: str) -> List[str]:
     """Collects all JPG files in a directory recursively.
 

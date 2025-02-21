@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from image_functions import get_image_date, replace_exif, get_jpg_files
+from image_utils import get_image_date, replace_exif, get_jpg_files
 
 dir_path = ""  # /Users/user/Desktop/temp
 max_date = datetime(2025, 1, 1, 1, 1, 1)
