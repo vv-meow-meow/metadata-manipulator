@@ -1,165 +1,152 @@
-import os
-import logging
-from datetime import datetime
-from typing import Union, List
+"""
+EXIF handling utilities for image processing.
 
+Provides functionality for:
+- Finding image files
+- Reading/updating EXIF metadata
+- Date comparisons and adjustments
+"""
+
+import logging
+import os
+from datetime import datetime
+from typing import Union, Generator
+
+import piexif
 from PIL import Image
 from PIL.ExifTags import TAGS
 from PIL.ImageFile import ImageFile
-import piexif
 
 
-class ExifManipulator:
-    def __init__(self, max_date, change_date):
-        self.max_date = max_date
-        self.change_date = change_date
+class EXIFHandler:
+    """Handles EXIF operations for image files."""
 
-    def process_directory(self, directory):
-        pass
+    _VALID_HOURS = (
+        "00", "01", "02", "03", "04", "05", "06", "07", "08", "09",
+        "10", "11", "12", "13", "14", "15", "16", "17", "18", "19",
+        "20", "21", "22", "23"
+    )
 
-    def _process_single_file(self, file_path):
-        pass
+    def __init__(self, default_date: datetime = datetime(9999, 1, 1)):
+        self.default_date = default_date
 
-    def _handle_date_comparison(self, file_path, file_date):
-        pass
+    @classmethod
+    def print_metadata(cls, image: Union[ImageFile, str]) -> None:
+        """Print all EXIF metadata for an image.
 
-    def _update_exif_data(self, file_path):
-        pass
-
-
-def get_jpg_files(directory: str) -> List[str]:
-    """Collects all JPG files in a directory recursively.
-
-    Args:
-        directory (str): Path to the directory to search for JPG files.
-
-    Returns:
-        List[str]: List of full paths to JPG files in the directory and subdirectories.
-
-    Example:
-        >>> get_jpg_files("/path/to/photos")
-        ['/path/to/photos/image1.jpg', '/path/to/photos/party/image2.jpg']
-    """
-    return [
-        os.path.join(root, filename)
-        for root, _, files in os.walk(directory)
-        for filename in files
-        if filename.lower().endswith('.jpg')
-    ]
-
-
-def print_metadata(image: ImageFile) -> None:
-    """Prints all metadata entries from an image's EXIF data.
-
-    Args:
-        image (ImageFile): PIL ImageFile object to examine.
-
-    Example:
-        >>> with Image.open("image.jpg") as img:
-        >>>     print_metadata(img)
-    """
-    exif_data = image.getexif()
-    for tag_id, value in exif_data.items():
-        tag_name = TAGS.get(tag_id, tag_id)
-        print(f"{tag_name:25}: {value}")
-
-
-def get_image_date(image: Union[ImageFile, str]) -> datetime:
-    """Extracts and validates the creation date from an image's EXIF data.
-
-    Args:
-        image (Union[ImageFile, str]): Either a PIL ImageFile object or path string.
-
-    Returns:
-        datetime: Parsed creation datetime from EXIF metadata.
-
-    Raises:
-        RuntimeError: If no creation date found in EXIF data
-        ValueError: If datetime format is invalid
-
-    Example:
-        >>> get_image_date("image.jpg")
-        datetime.datetime(2023, 8, 15, 12, 30, 0)
-    """
-    path = None
-    exif_data = None
-
-    if isinstance(image, str):
-        path = image
-        with Image.open(path) as img:
+        Args:
+            image (Union[ImageFile, str]): Image object or file path
+        """
+        img = cls._open_image(image)
+        try:
             exif_data = img.getexif()
-    else:
-        exif_data = image.getexif()
+            for tag_id, value in exif_data.items():
+                tag_name = TAGS.get(tag_id, tag_id)
+                print(f"{tag_name:25}: {value}")
+        finally:
+            if isinstance(image, str):
+                img.close()
 
-    creation_date = exif_data.get(piexif.ImageIFD.DateTime)
-    if not creation_date:
-        raise RuntimeError(f"No creation date found for image: {path or 'provided ImageFile'}")
+    @staticmethod
+    def find_images(directory: str) -> Generator[str, None, None]:
+        """Find JPG/JPEG files recursively in a directory.
 
-    if len(creation_date) >= 20 and creation_date[11:13] == "24":
-        logging.warning(f"Invalid hour (24) in {creation_date} for {path}, correcting to 00")
-        creation_date = f"{creation_date[:11]}00{creation_date[13:]}"
+        Args:
+            directory (str): Path to search for images
 
-    try:
-        return datetime.strptime(creation_date, "%Y:%m:%d %H:%M:%S")
-    except ValueError as e:
-        raise ValueError(f"Invalid datetime format '{creation_date}' in {path or 'image'}") from e
+        Yields:
+            str: Full path to found image files
+        """
+        for root, _, files in os.walk(directory):
+            for filename in files:
+                if filename.lower().endswith((".jpg", ".jpeg")):
+                    yield os.path.join(root, filename)
 
+    def get_image_date(self, image: Union[ImageFile, str]) -> datetime:
+        """Extract and validate creation date from EXIF data.
 
-def compare_image_data(left: Union[ImageFile, str], right: datetime) -> bool:
-    """Compares image creation date against a reference datetime.
+        Args:
+            image (Union[ImageFile, str]): Image object or file path
 
-    Args:
-        left (Union[ImageFile, str]): Image to check (path or ImageFile object)
-        right (datetime): Reference datetime for comparison
+        Returns:
+            datetime: Validated creation date, otherwise if not found EXIF returns self.default_date
 
-    Returns:
-        bool: True if image date is earlier than or equal to reference datetime
+        Raises:
+            ValueError: If date format is invalid
+        """
+        img = self._open_image(image)
+        try:
+            exif_data = img.getexif()
+            date_str = exif_data.get(piexif.ImageIFD.DateTime)
+            # TODO: also check for DateTimeOriginal and DateTimeDigitized
 
-    Example:
-        >>> compare_image_data("image.jpg", datetime(2023, 12, 31))
-        True
-    """
-    return get_image_date(left) <= right
+            if not date_str:
+                logging.warning(f"No EXIF date found for {image if isinstance(image, str) else 'image'}")
+                return self.default_date
 
+            date_str = self._fix_invalid_hours(date_str, image)
+            return self._parse_datetime(date_str, image)
+        finally:
+            if isinstance(image, str):
+                img.close()
 
-def replace_exif(file: str, datetime_object: datetime) -> None:
-    """Replaces EXIF datetime tags in an image file with specified datetime.
+    def update_exif_date(self, file_path: str, new_date: datetime) -> None:
+        """Update EXIF datetime tags in an image file.
 
-    Updates three EXIF datetime fields:
-    - DateTimeOriginal (36867)
-    - DateTimeDigitized (36868)
-    - DateTime (306)
+        Args:
+            file_path (str): Path to image file
+            new_date (datetime): New datetime to set
 
-    Args:
-        file (str): Path to image file
-        datetime_object (datetime): Datetime to write to EXIF tags
+        Raises:
+            RuntimeError: If EXIF update fails
+        """
+        try:
+            exif_dict = self._load_exif_data(file_path)
+            date_bytes = new_date.strftime("%Y:%m:%d %H:%M:%S").encode('utf-8')
 
-    Raises:
-        RuntimeError: If EXIF processing or file writing fails
+            exif_dict["Exif"][piexif.ExifIFD.DateTimeOriginal] = date_bytes
+            exif_dict["Exif"][piexif.ExifIFD.DateTimeDigitized] = date_bytes
+            exif_dict["0th"][piexif.ImageIFD.DateTime] = date_bytes
 
-    Example:
-        >>> replace_exif("image.jpg", datetime(2023, 1, 1, 12, 0))
-    """
-    try:
-        with Image.open(file) as img:
+            self._save_exif_data(file_path, exif_dict)
+            logging.info(f"Updated EXIF date for {file_path}")
+        except Exception as e:
+            raise RuntimeError(f"Failed to update {file_path}") from e
+
+    @classmethod
+    def _fix_invalid_hours(cls, date_str: str, image: Union[ImageFile, str]) -> str:
+        """Fix invalid 24-hour format dates."""
+        if date_str[11:13] not in cls._VALID_HOURS:
+            logging.warning(f"Invalid hour in {date_str} for {image}, correcting to 00")
+            return f"{date_str[:11]}00{date_str[13:]}"
+        return date_str
+
+    @staticmethod
+    def _open_image(image: Union[ImageFile, str]) -> ImageFile:
+        """Safe image opening helper."""
+        return Image.open(image) if isinstance(image, str) else image
+
+    @staticmethod
+    def _parse_datetime(date_str: str, image: Union[ImageFile, str]) -> datetime:
+        """Parse datetime string with validation."""
+        try:
+            return datetime.strptime(date_str, "%Y:%m:%d %H:%M:%S")
+        except ValueError as e:
+            logging.error(f"Invalid date format {date_str} in {image}")
+            raise ValueError(f"Invalid date format in {image}") from e
+
+    @staticmethod
+    def _load_exif_data(file_path: str) -> dict:
+        """Load existing EXIF data or create new structure."""
+        with Image.open(file_path) as img:
             try:
-                exif_dict = piexif.load(img.info['exif'])
-                logging.info(f"Loaded existing EXIF data from {file}")
-            except KeyError:
-                logging.warning(f"No EXIF data in {file}, creating new")
-                exif_dict = {"0th": {}, "Exif": {}}
-    except Exception as e:
-        raise RuntimeError(f"Failed to process {file}") from e
+                return piexif.load(img.info["exif"])
+            except (KeyError, ValueError):
+                logging.info(f"Creating new EXIF data for {file_path}")
+                return {"0th": {}, "Exif": {}}
 
-    date_str = datetime_object.strftime("%Y:%m:%d %H:%M:%S").encode('utf-8')
-
-    exif_dict["Exif"][piexif.ExifIFD.DateTimeOriginal] = date_str
-    exif_dict["Exif"][piexif.ExifIFD.DateTimeDigitized] = date_str
-    exif_dict["0th"][piexif.ImageIFD.DateTime] = date_str
-
-    try:
+    @staticmethod
+    def _save_exif_data(file_path: str, exif_dict: dict) -> None:
+        """Save EXIF data to file."""
         exif_bytes = piexif.dump(exif_dict)
-        piexif.insert(exif_bytes, file)
-        logging.info(f"Successfully updated EXIF data in {file}")
-    except Exception as e:
-        raise RuntimeError(f"Failed to write EXIF data to {file}") from e
+        piexif.insert(exif_bytes, file_path)
